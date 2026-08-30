@@ -71,27 +71,22 @@ async def handle_start_deep_link(message: Message, command: CommandObject):
     else:
         await message.answer("❌ متأسفانه این لینک نامعتبر است یا ویدیوی مربوطه پیدا نشد.")
 
-# ۲. وقتی کاربر استارت معمولی می‌زند (خوش‌آمدگویی زیبا)
+# ۲. پیام شروع ساده و شیک (بدون نام کاربر و راهنمای اضافه)
 @dp.message(CommandStart())
 async def handle_start_plain(message: Message):
-    user_name = message.from_user.first_name or "دوست گرامی"
     welcome_text = (
-        f"سلام **{user_name}** عزیز! 🌸✨\n"
-        f"خیلی خوش اومدی به ربات اختصاصی ما.\n\n"
-        f"📌 **راهنمای استفاده:**\n"
-        f"• برای تماشای ویدیوها، کافیست روی **لینک اختصاصی** آن‌ها کلیک کنید.\n"
-        f"• برای ساخت لینک دائمی، کافیست **یک ویدیو** همینجا ارسال کنید تا لینک آن را تحویل بگیرید.\n\n"
-        f"امیدوارم لذت ببرید! 💫"
+        "سلام! خیلی خوش اومدی به ربات ما.\n\n"
+        "امیدوارم لذت ببرید! 💫"
     )
     await message.answer(welcome_text)
 
-# ۳. دریافت ویدیو و ساخت لینک دائمی
+# ۳. دریافت ویدیو از ادمین و ساخت لینک دائمی
 @dp.message(F.video)
 async def handle_video_upload(message: Message):
     video_id = message.video.file_id
     link_key = f"v_{message.message_id}_{message.from_user.id}"
     
-    # ذخیره پایدار در دیتابیس
+    # ذخیره در دیتابیس فایل
     db = load_db()
     db[link_key] = video_id
     save_db(db)
@@ -101,8 +96,7 @@ async def handle_video_upload(message: Message):
     
     await message.reply(
         f"✅ **ویدیو با موفقیت ذخیره شد!**\n\n"
-        f"🔗 **لینک اختصاصی و دائمی ویدیو:**\n`{share_link}`\n\n"
-        f"📋 *هر شخصی روی لینک بالا بزند، ویدیو را تحویل گرفته و پس از ۳۰ ثانیه از پیوی او پاک خواهد شد (لینک برای همیشه کار می‌کند).* "
+        f"🔗 **لینک اختصاصی ویدیو:**\n`{share_link}`"
     )
 
 async def main():
