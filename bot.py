@@ -4,7 +4,7 @@ import asyncio
 import logging
 from aiohttp import web
 from aiogram import Bot, Dispatcher, F
-from aiogram.filters import CommandStart, CommandObject
+from aiogram.filters import Command
 from aiogram.types import Message
 
 logging.basicConfig(level=logging.INFO)
@@ -12,12 +12,16 @@ logging.basicConfig(level=logging.INFO)
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 PORT = int(os.getenv("PORT", 8080))
 
+# لیست آیدی عددی تلگرام ادمین‌ها (با کاما جدا کنید یا در متغیر رندر ADMIN_IDS قرار دهید)
+# مثال: ADMIN_IDS = "123456789,987654321"
+admin_env = os.getenv("ADMIN_IDS", "")
+ADMIN_IDS = [int(i.strip()) for i in admin_env.split(",") if i.strip().isdigit()]
+
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
 DB_FILE = "videos_db.json"
 
-# توابع ذخیره و خواندن دائمی اطلاعات ویدیوها
 def load_db():
     if os.path.exists(DB_FILE):
         try:
@@ -34,7 +38,7 @@ def save_db(data):
     except Exception as e:
         logging.error(f"Error saving database: {e}")
 
-# وب‌سرور برای زنده ماندن ربات در سرور رندر
+# وب‌سرور برای زنده ماندن ربات در رندر
 async def handle_ping(request):
     return web.Response(text="Bot is online and working!")
 
@@ -47,46 +51,55 @@ async def start_web_server():
     await site.start()
     logging.info(f"Web server started on port {PORT}")
 
-# ۱. وقتی کاربر با لینک اختصاصی وارد ربات می‌شود
-@dp.message(CommandStart(deep_link=True))
-async def handle_start_deep_link(message: Message, command: CommandObject):
-    link_key = command.args.strip()
-    db = load_db()
-    video_id = db.get(link_key)
+# مدیریت دستور start چه ساده و چه با لینک (Direct command handler)
+@dp.message(Command("start"))
+async def handle_start(message: Message):
+    text_parts = message.text.strip().split(maxsplit=1)
     
-    if video_id:
-        # ارسال ویدیو به کاربر
-        sent_video = await message.answer_video(
-            video=video_id,
-            caption="🎬 **ویدیوی درخواستی شما با موفقیت دریافت شد!**\n\n⏳ *توجه: این ویدیو پس از ۳۰ ثانیه به صورت خودکار حذف خواهد شد.*"
-        )
+    # اگر لینک همراه با پارامتر باشد (مانند /start v_123_456)
+    if len(text_parts) > 1:
+        link_key = text_parts[1].strip()
+        db = load_db()
+        video_id = db.get(link_key)
         
-        # ۳۰ ثانیه شمارش معکوس و حذف پیام
-        await asyncio.sleep(30)
-        try:
-            await sent_video.delete()
-            await message.answer("⏱️ **مهلت تماشای ویدیو به پایان رسید.**\n\n✨ اگر مجدداً قصد تماشای آن را دارید، می‌توانید دوباره روی همان لینک اختصاصی کلیک کنید.")
-        except Exception as e:
-            logging.error(f"Error deleting video: {e}")
+        if video_id:
+            try:
+                sent_video = await message.answer_video(
+                    video=video_id,
+                    caption="🎬 **ویدیوی درخواستی شما دریافت شد!**\n\n⏳ *توجه: این پیام پس از ۳۰ ثانیه حذف خواهد شد.*"
+                )
+                # حذف پیام ویدیو بعد از ۳۰ ثانیه
+                await asyncio.sleep(30)
+                try:
+                    await sent_video.delete()
+                except Exception as e:
+                    logging.error(f"Error deleting video: {e}")
+            except Exception as err:
+                logging.error(f"Error sending video: {err}")
+                await message.answer("❌ خطا در بارگذاری و ارسال ویدیو.")
+        else:
+            await message.answer("❌ متأسفانه این ویدیو یافت نشد یا لینک نامعتبر است.")
     else:
-        await message.answer("❌ متأسفانه این لینک نامعتبر است یا ویدیوی مربوطه پیدا نشد.")
+        # وقتی کاربر استارت خالی می‌زند
+        welcome_text = (
+            "سلام! خیلی خوش اومدی به ربات ما.\n\n"
+            "امیدوارم لذت ببرید! 💫"
+        )
+        await message.answer(welcome_text)
 
-# ۲. پیام شروع ساده و شیک (بدون نام کاربر و راهنمای اضافه)
-@dp.message(CommandStart())
-async def handle_start_plain(message: Message):
-    welcome_text = (
-        "سلام! خیلی خوش اومدی به ربات ما.\n\n"
-        "امیدوارم لذت ببرید! 💫"
-    )
-    await message.answer(welcome_text)
-
-# ۳. دریافت ویدیو از ادمین و ساخت لینک دائمی
+# دریافت ویدیو و ساخت لینک اختصاصی (فقط مخصوص ادمین‌ها)
 @dp.message(F.video)
 async def handle_video_upload(message: Message):
-    video_id = message.video.file_id
-    link_key = f"v_{message.message_id}_{message.from_user.id}"
+    user_id = message.from_user.id
     
-    # ذخیره در دیتابیس فایل
+    # بررسی اینکه آیا کاربر ادمین است یا خیر (اگر ADMIN_IDS تنظیم نشده باشد، به همه موقتاً اجازه می‌دهد)
+    if ADMIN_IDS and user_id not in ADMIN_IDS:
+        await message.reply("⛔ شما دسترسی ساخت لینک برای ویدیو را ندارید.")
+        return
+
+    video_id = message.video.file_id
+    link_key = f"v_{message.message_id}_{user_id}"
+    
     db = load_db()
     db[link_key] = video_id
     save_db(db)
@@ -95,8 +108,8 @@ async def handle_video_upload(message: Message):
     share_link = f"https://t.me/{bot_info.username}?start={link_key}"
     
     await message.reply(
-        f"✅ **ویدیو با موفقیت ذخیره شد!**\n\n"
-        f"🔗 **لینک اختصاصی ویدیو:**\n`{share_link}`"
+        f"✅ **ویدیو ذخیره شد!**\n\n"
+        f"🔗 **لینک اختصاصی:**\n`{share_link}`"
     )
 
 async def main():
