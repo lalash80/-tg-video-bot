@@ -1,115 +1,97 @@
 import asyncio
-import json
-import logging
 import os
-import secrets
 from aiohttp import web
 from aiogram import Bot, Dispatcher, F
-from aiogram.filters import CommandStart, CommandObject
 from aiogram.types import Message
+from aiogram.filters import CommandStart, CommandObject
+from aiogram.enums import ParseMode
+from aiogram.client.default import DefaultBotProperties
 
-# تنظیمات لاگ
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+# توکن ربات (از رندر خوانده می‌شود و در صورت نبود، مقدار پیش‌فرض)
+BOT_TOKEN = os.getenv("BOT_TOKEN", "7963384210:AAGr4U6t-6a84N980PqfV4QZq4Z7Xq-example")
 
-# دریافت متغیرهای محیطی
-BOT_TOKEN = os.environ.get("BOT_TOKEN")
-ADMIN_IDS_RAW = os.environ.get("ADMIN_IDS", "")
-# ساخت لیست عددی از ادمین‌ها
-ADMIN_IDS = [int(x.strip()) for x in ADMIN_IDS_RAW.split(",") if x.strip().isdigit()]
+# آیدی‌های ادمین (آیدی عددی شما مستقیماً اینجا ست شد)
+ADMIN_IDS = [214838628]
 
-if not BOT_TOKEN:
-    raise ValueError("متغیر BOT_TOKEN در Render ست نشده است!")
+# اگر در متغیرهای محیطی هم چیزی ست شده باشد اضافه می‌شود
+env_admins = os.getenv("ADMIN_IDS", "")
+if env_admins:
+    for a in env_admins.split(","):
+        if a.strip().isdigit():
+            ADMIN_IDS.append(int(a.strip()))
 
-bot = Bot(token=BOT_TOKEN)
+bot = Bot(
+    token=BOT_TOKEN,
+    default=DefaultBotProperties(parse_mode=ParseMode.HTML)
+)
 dp = Dispatcher()
 
-DB_FILE = "videos_db.json"
+# دیکشنری موقت برای ذخیره ویدیوها (file_id)
+# در صورت نیاز می‌توانید به دیتابیس متصل کنید
+video_db = {}
 
-def load_db():
-    if not os.path.exists(DB_FILE):
-        return {}
-    try:
-        with open(DB_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception as e:
-        logger.error(f"Error loading DB: {e}")
-        return {}
-
-def save_db(data):
-    try:
-        with open(DB_FILE, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
-    except Exception as e:
-        logger.error(f"Error saving DB: {e}")
-
-# تابع حذف پیام بعد از ۳۰ ثانیه
 async def delete_message_later(chat_id: int, message_id: int, delay: int = 30):
+    """حذف خودکار پیام بعد از مدت زمان مشخص"""
     await asyncio.sleep(delay)
     try:
         await bot.delete_message(chat_id=chat_id, message_id=message_id)
-    except Exception as e:
-        logger.warning(f"Failed to delete message: {e}")
+    except Exception:
+        pass
 
-# هندلر دستور استارت (هم استارت ساده هم با لینک ویدیو)
-@dp.message(CommandStart())
-async def start_handler(message: Message, command: CommandObject):
-    args = command.args
-    db = load_db()
-
-    # اگر کاربر با لینک اختصاصی ویدیو وارد شده باشد
-    if args and args in db:
-        video_info = db[args]
-        file_id = video_info.get("file_id")
-        caption = video_info.get("caption", "")
-
-        try:
-            sent_msg = await message.answer_video(
-                video=file_id,
-                caption=caption or "🎬 این ویدیو پس از ۳۰ ثانیه به صورت خودکار حذف خواهد شد."
-            )
-            # زمان‌بندی حذف پیام بعد از ۳۰ ثانیه
-            asyncio.create_task(delete_message_later(message.chat.id, sent_msg.message_id, 30))
-        except Exception as e:
-            logger.error(f"Error sending video: {e}")
-            await message.answer("⚠️ متأسفانه در ارسال ویدیو مشکلی پیش آمد.")
+@dp.message(CommandStart(deep_link=True))
+async def start_deep_link_handler(message: Message, command: CommandObject):
+    """هندلر دیپ‌لینک برای استارت از طریق آیفون و اندروید"""
+    video_key = command.args
+    if not video_key:
+        await message.answer("سلام! به ربات خوش آمدید.")
         return
 
-    # اگر فقط استارت ساده زده باشد
-    await message.answer("سلام! خیلی خوش اومدی به ربات ما. امیدوارم لذت ببرید! 💫")
+    file_id = video_db.get(video_key)
+    if not file_id:
+        # اگر کلید خود file_id باشد مستقیم ارسال می‌کنیم
+        file_id = video_key
 
-# هندلر دریافت ویدیو (فقط برای ادمین‌ها)
+    try:
+        sent_msg = await message.answer_video(
+            video=file_id,
+            caption="⚠️ این ویدیو پس از ۳۰ ثانیه به صورت خودکار حذف خواهد شد."
+        )
+        # اجرای حذف خودکار در پس‌زمینه
+        asyncio.create_task(delete_message_later(message.chat.id, sent_msg.message_id, delay=30))
+    except Exception as e:
+        await message.answer("❌ متأسفانه ویدیو یافت نشد یا مشکلی در ارسال پیش آمد.")
+
+@dp.message(CommandStart())
+async def start_normal_handler(message: Message):
+    """هندلر استارت معمولی بدون لینک"""
+    if message.from_user.id in ADMIN_IDS:
+        await message.answer("سلام ادمین عزیز! 👋\nبرای ساخت لینک، کافیست ویدیو را برای من فوروارد یا آپلود کنید.")
+    else:
+        await message.answer("سلام! برای دریافت ویدیوها باید از لینک‌های اختصاصی استفاده کنید.")
+
 @dp.message(F.video)
 async def video_handler(message: Message):
-    # چک کردن دسترسی ادمین
+    """دریافت ویدیو و ساخت لینک اختصاصی (فقط ادمین)"""
     if message.from_user.id not in ADMIN_IDS:
-        await message.answer("⛔️ شما دسترسی لازم برای آپلود و تولید لینک ویدیو را ندارید.")
+        await message.reply("⛔️ شما دسترسی لازم برای آپلود ویدیو و ایجاد لینک را ندارید.")
         return
 
     file_id = message.video.file_id
-    caption = message.caption or ""
-    video_key = "vid_" + secrets.token_urlsafe(8)
-
-    db = load_db()
-    db[video_key] = {
-        "file_id": file_id,
-        "caption": caption
-    }
-    save_db(db)
-
     bot_info = await bot.get_me()
-    link = f"https://t.me/{bot_info.username}?start={video_key}"
-
+    
+    # ساخت کلید کوتاه یا استفاده از شناسه فایل
+    link = f"https://t.me/{bot_info.username}?start={file_id}"
+    
     await message.reply(
-        f"✅ **ویدیو با موفقیت ذخیره شد!**\n\n"
-        f"🔗 **لینک دائمی ویدیو:**\n`{link}`\n\n"
-        f"*(هر کاربری روی این لینک کلیک کند و Start را بزند، ویدیو را دریافت می‌کند و پیام ارسالی بعد از ۳۰ ثانیه برای او حذف می‌شود.)*",
-        parse_mode="Markdown"
+        f"✅ ویدیو با موفقیت ثبت شد!\n\n"
+        f"🔗 <b>لینک اختصاصی برای انتشار:</b>\n"
+        f"<code>{link}</code>\n\n"
+        f"📱 این لینک در تمامی دستگاه‌ها (از جمله آیفون) کار می‌کند."
     )
 
-# وب‌سرور سبک برای زنده نگه داشتن سرویس در Render
+# وب‌سرور سبک برای زنده نگه داشتن سرویس روی رندر و پورت 10000
 async def handle_ping(request):
-    return web.Response(text="Bot is running perfectly!")
+    return web.Response(text="Bot is running smoothly!")
 
 async def start_web_server():
     app = web.Application()
@@ -117,16 +99,14 @@ async def start_web_server():
     app.router.add_get("/ping", handle_ping)
     runner = web.AppRunner(app)
     await runner.setup()
-    port = int(os.environ.get("PORT", 8080))
+    port = int(os.getenv("PORT", 10000))
     site = web.TCPSite(runner, "0.0.0.0", port)
     await site.start()
-    logger.info(f"Web server started on port {port}")
 
 async def main():
+    # شروع وب‌سرور در پس‌زمینه
     await start_web_server()
-    # پاک کردن وب‌هوک و آپدیت‌های معلق قدیمی
-    await bot.delete_webhook(drop_pending_updates=True)
-    logger.info("Bot polling started...")
+    # شروع گوش دادن به پیام‌های تلگرام
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
