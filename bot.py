@@ -1,4 +1,5 @@
 import os
+import json
 import asyncio
 import logging
 from aiohttp import web
@@ -14,11 +15,28 @@ PORT = int(os.getenv("PORT", 8080))
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
-# دیکشنری دائمی برای نگهداری ویدیوها تا لینک هرگز منقضی نشود
-videos_db = {}
+DB_FILE = "videos_db.json"
 
+# توابع ذخیره و خواندن دائمی اطلاعات ویدیوها
+def load_db():
+    if os.path.exists(DB_FILE):
+        try:
+            with open(DB_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return {}
+    return {}
+
+def save_db(data):
+    try:
+        with open(DB_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        logging.error(f"Error saving database: {e}")
+
+# وب‌سرور برای زنده ماندن ربات در سرور رندر
 async def handle_ping(request):
-    return web.Response(text="Bot is running!")
+    return web.Response(text="Bot is online and working!")
 
 async def start_web_server():
     app = web.Application()
@@ -29,53 +47,62 @@ async def start_web_server():
     await site.start()
     logging.info(f"Web server started on port {PORT}")
 
-# هندلر مدیریت لینک اختصاصی (حتی برای بار چندم)
+# ۱. وقتی کاربر با لینک اختصاصی وارد ربات می‌شود
 @dp.message(CommandStart(deep_link=True))
 async def handle_start_deep_link(message: Message, command: CommandObject):
     link_key = command.args.strip()
-    video_id = videos_db.get(link_key)
+    db = load_db()
+    video_id = db.get(link_key)
     
     if video_id:
         # ارسال ویدیو به کاربر
         sent_video = await message.answer_video(
             video=video_id,
-            caption="⚠️ این ویدیو پس از ۳۰ ثانیه به صورت خودکار حذف خواهد شد."
+            caption="🎬 **ویدیوی درخواستی شما با موفقیت دریافت شد!**\n\n⏳ *توجه: این ویدیو پس از ۳۰ ثانیه به صورت خودکار حذف خواهد شد.*"
         )
         
-        # ۳۰ ثانیه بعد فقط پیام ارسالی به این کاربر حذف می‌شود، اصل لینک و ویدیو باقی می‌ماند
+        # ۳۰ ثانیه شمارش معکوس و حذف پیام
         await asyncio.sleep(30)
         try:
             await sent_video.delete()
-            # پیام یادآوری بعد از حذف
-            await message.answer("⏱️ مهلت تماشای ویدیو به پایان رسید و ویدیو حذف شد.\nبرای دریافت مجدد می‌توانید دوباره روی لینک اختصاصی کلیک کنید.")
+            await message.answer("⏱️ **مهلت تماشای ویدیو به پایان رسید.**\n\n✨ اگر مجدداً قصد تماشای آن را دارید، می‌توانید دوباره روی همان لینک اختصاصی کلیک کنید.")
         except Exception as e:
             logging.error(f"Error deleting video: {e}")
     else:
-        await message.answer("❌ متأسفانه این لینک نامعتبر است یا ربات بازنشانی شده است.")
+        await message.answer("❌ متأسفانه این لینک نامعتبر است یا ویدیوی مربوطه پیدا نشد.")
 
-# هندلر استارت معمولی
+# ۲. وقتی کاربر استارت معمولی می‌زند (خوش‌آمدگویی زیبا)
 @dp.message(CommandStart())
 async def handle_start_plain(message: Message):
-    await message.answer("👋 سلام! برای دریافت ویدیو از لینک اختصاصی استفاده کنید، یا یک ویدیو برای من بفرستید تا لینک دائمی آن را تحویل بگیرید.")
+    user_name = message.from_user.first_name or "دوست گرامی"
+    welcome_text = (
+        f"سلام **{user_name}** عزیز! 🌸✨\n"
+        f"خیلی خوش اومدی به ربات اختصاصی ما.\n\n"
+        f"📌 **راهنمای استفاده:**\n"
+        f"• برای تماشای ویدیوها، کافیست روی **لینک اختصاصی** آن‌ها کلیک کنید.\n"
+        f"• برای ساخت لینک دائمی، کافیست **یک ویدیو** همینجا ارسال کنید تا لینک آن را تحویل بگیرید.\n\n"
+        f"امیدوارم لذت ببرید! 💫"
+    )
+    await message.answer(welcome_text)
 
-# دریافت ویدیو از ادمین و ایجاد لینک دائمی
+# ۳. دریافت ویدیو و ساخت لینک دائمی
 @dp.message(F.video)
 async def handle_video_upload(message: Message):
     video_id = message.video.file_id
-    # کلید یکتا و مرتب برای لینک
     link_key = f"v_{message.message_id}_{message.from_user.id}"
-    videos_db[link_key] = video_id
+    
+    # ذخیره پایدار در دیتابیس
+    db = load_db()
+    db[link_key] = video_id
+    save_db(db)
     
     bot_info = await bot.get_me()
     share_link = f"https://t.me/{bot_info.username}?start={link_key}"
     
     await message.reply(
-        f"✅ ویدیو با موفقیت ثبت و لینک دائمی ساخته شد!\n\n"
-        f"🔗 **لینک اختصاصی ویدیو:**\n`{share_link}`\n\n"
-        f"📌 **ویژگی‌ها:**\n"
-        f"• این لینک دائمی است و هرگز منقضی نمی‌شود.\n"
-        f"• هر کاربر با کلیک روی لینک، ویدیو را دریافت می‌کند و ۳۰ ثانیه بعد از پیام او پاک می‌شود.\n"
-        f"• کاربر حتی می‌تواند بعداً دوباره روی لینک کلیک کند و ویدیو را تحویل بگیرد."
+        f"✅ **ویدیو با موفقیت ذخیره شد!**\n\n"
+        f"🔗 **لینک اختصاصی و دائمی ویدیو:**\n`{share_link}`\n\n"
+        f"📋 *هر شخصی روی لینک بالا بزند، ویدیو را تحویل گرفته و پس از ۳۰ ثانیه از پیوی او پاک خواهد شد (لینک برای همیشه کار می‌کند).* "
     )
 
 async def main():
