@@ -13,7 +13,7 @@ from aiogram.client.default import DefaultBotProperties
 BOT_TOKEN = os.getenv("BOT_TOKEN", "7963384210:AAGr4U6t-6a84N980PqfV4QZq4Z7Xq-example")
 
 # لیست آیدی‌های مجاز (ادمین‌های ربات)
-ADMIN_IDS = [214838628, 8729143361]
+ADMIN_IDS = [214838628, 8729143361, 1588149982]
 
 # اگر متغیری در رندر هم تعریف شده باشد اضافه می‌شود
 env_admins = os.getenv("ADMIN_IDS", "")
