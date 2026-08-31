@@ -12,10 +12,10 @@ from aiogram.client.default import DefaultBotProperties
 # توکن ربات
 BOT_TOKEN = os.getenv("BOT_TOKEN", "7963384210:AAGr4U6t-6a84N980PqfV4QZq4Z7Xq-example")
 
-# لیست آیدی‌های مجاز (ادمین‌های ربات)
-ADMIN_IDS = [214838628, 8729143361, 1588149982]
+# لیست ادمین‌های ربات
+ADMIN_IDS = [214838628, 8729143361]
 
-# اگر متغیری در رندر هم تعریف شده باشد اضافه می‌شود
+# دریافت ادمین‌های اضافی از متغیرهای محیطی در صورت وجود
 env_admins = os.getenv("ADMIN_IDS", "")
 if env_admins:
     for a in env_admins.split(","):
@@ -28,7 +28,7 @@ bot = Bot(
 )
 dp = Dispatcher()
 
-# مسیر فایل دیتابیس
+# مسیر دیتابیس فایل‌ها
 DB_FILE = "media_db.json"
 
 def load_db():
@@ -60,7 +60,7 @@ async def delete_message_later(chat_id: int, message_id: int, delay: int = 30):
 
 @dp.message(CommandStart())
 async def handle_start(message: Message, command: CommandObject):
-    """هندلر استارت سازگار با آیفون و اندروید"""
+    """هندلر استارت با پشتیبانی کامل از iOS و Android"""
     args = command.args
 
     if args:
@@ -68,21 +68,28 @@ async def handle_start(message: Message, command: CommandObject):
         item = media_db.get(short_id)
 
         if item:
-            # سازگاری با فرمت جدید و فرمت‌های قدیمی
+            # خواندن اطلاعات فایل ذخیره‌شده
             if isinstance(item, dict):
                 file_id = item.get("file_id")
                 file_type = item.get("type", "video")
+                custom_caption = item.get("caption", "")
             else:
                 file_id = item
                 file_type = "video"
+                custom_caption = ""
+
+            # ساخت متن نهایی همراه با کپشن ادمین
+            caption_parts = []
+            if custom_caption:
+                caption_parts.append(custom_caption)
+            caption_parts.append("⚠️ این فایل پس از ۳۰ ثانیه به صورت خودکار حذف خواهد شد.")
+            final_caption = "\n\n".join(caption_parts)
 
             try:
-                caption_text = "⚠️ این فایل پس از ۳۰ ثانیه به صورت خودکار حذف خواهد شد."
-                
                 if file_type == "photo":
-                    sent_msg = await message.answer_photo(photo=file_id, caption=caption_text)
+                    sent_msg = await message.answer_photo(photo=file_id, caption=final_caption)
                 else:
-                    sent_msg = await message.answer_video(video=file_id, caption=caption_text)
+                    sent_msg = await message.answer_video(video=file_id, caption=final_caption)
 
                 asyncio.create_task(delete_message_later(message.chat.id, sent_msg.message_id, delay=30))
                 return
@@ -93,11 +100,12 @@ async def handle_start(message: Message, command: CommandObject):
             await message.answer("❌ این لینک معتبر نیست یا منقضی شده است.")
             return
 
-    # پیام استارت عادی
+    # پیام راهنما برای استارت عادی
     if message.from_user.id in ADMIN_IDS:
         await message.answer(
             "سلام ادمین عزیز! 👋\n\n"
-            "برای ساخت لینک اختصاصی، کافیست **عکس** یا **ویدیو** مورد نظر را برای من ارسال کنید."
+            "برای ساخت لینک، کافیست **عکس** یا **ویدیو** را بفرستید.\n"
+            "💡 <i>اگر متنی (کپشن) همراه عکس/ویدیو بنویسید، همان متن برای کاربران نیز نمایش داده خواهد شد.</i>"
         )
     else:
         await message.answer(
@@ -107,42 +115,50 @@ async def handle_start(message: Message, command: CommandObject):
 
 @dp.message(F.video | F.photo)
 async def handle_media_upload(message: Message):
-    """دریافت ویدیو یا عکس از ادمین و ایجاد لینک اختصاصی کوتاه"""
+    """دریافت رسانه و ذخیره متن/کپشن اختصاصی"""
     if message.from_user.id not in ADMIN_IDS:
-        await message.reply("⛔️ شما اجازه آپلود فایل و ساخت لینک را ندارید.")
+        await message.reply("⛔️ شما دسترسی لازم برای آپلود فایل و ساخت لینک را ندارید.")
         return
 
-    # تشخیص نوع فایل و گرفتن file_id
+    # گرفتن کپشن ارسالی توسط ادمین (در صورت وجود)
+    custom_caption = message.caption or ""
+
     if message.video:
         file_id = message.video.file_id
         media_type = "video"
         type_fa = "ویدیو"
     elif message.photo:
-        file_id = message.photo[-1].file_id  # بالاترین کیفیت عکس
+        file_id = message.photo[-1].file_id
         media_type = "photo"
         type_fa = "عکس"
     else:
         return
 
-    # ساخت شناسه کوتاه اختصاصی
+    # ساخت شناسه کوتاه یکتا
     short_id = uuid.uuid4().hex[:8]
     media_db[short_id] = {
         "file_id": file_id,
-        "type": media_type
+        "type": media_type,
+        "caption": custom_caption
     }
     save_db(media_db)
 
     bot_info = await bot.get_me()
     link = f"https://t.me/{bot_info.username}?start={short_id}"
 
-    await message.reply(
-        f"✅ <b>{type_fa} با موفقیت ذخیره شد!</b>\n\n"
-        f"🔗 <b>لینک اختصاصی (سازگار با آیفون و اندروید):</b>\n"
+    status_text = f"✅ <b>{type_fa} با موفقیت ذخیره شد!</b>\n\n"
+    if custom_caption:
+        status_text += f"📝 <b>متن ثبت شده:</b>\n<i>{custom_caption}</i>\n\n"
+
+    status_text += (
+        f"🔗 <b>لینک اختصاصی:</b>\n"
         f"<code>{link}</code>\n\n"
-        f"💡 روی لینک بزنید یا آن را در کانال قرار دهید."
+        f"💡 روی لینک بزنید یا آن را به اشتراک بگذارید."
     )
 
-# وب‌سرور داخلی برای ماندگاری روی رندر
+    await message.reply(status_text)
+
+# وب‌سرور برای زنده نگه داشتن سرویس
 async def handle_ping(request):
     return web.Response(text="Bot is running smoothly!")
 
