@@ -12,9 +12,10 @@ from aiogram.client.default import DefaultBotProperties
 # توکن ربات
 BOT_TOKEN = os.getenv("BOT_TOKEN", "7963384210:AAGr4U6t-6a84N980PqfV4QZq4Z7Xq-example")
 
-# آیدی عددی شما به عنوان ادمین اصلی
-ADMIN_IDS = [214838628]
+# لیست آیدی‌های مجاز (ادمین‌های ربات)
+ADMIN_IDS = [214838628, 8729143361]
 
+# اگر متغیری در رندر هم تعریف شده باشد اضافه می‌شود
 env_admins = os.getenv("ADMIN_IDS", "")
 if env_admins:
     for a in env_admins.split(","):
@@ -27,8 +28,8 @@ bot = Bot(
 )
 dp = Dispatcher()
 
-# مسیر فایل ذخیره لینک‌ها
-DB_FILE = "videos_db.json"
+# مسیر فایل دیتابیس
+DB_FILE = "media_db.json"
 
 def load_db():
     if os.path.exists(DB_FILE):
@@ -46,8 +47,8 @@ def save_db(data):
     except Exception:
         pass
 
-# بارگذاری اولیه دیتابیس
-video_db = load_db()
+# بارگذاری دیتابیس
+media_db = load_db()
 
 async def delete_message_later(chat_id: int, message_id: int, delay: int = 30):
     """حذف پیام پس از ۳۰ ثانیه"""
@@ -59,70 +60,91 @@ async def delete_message_later(chat_id: int, message_id: int, delay: int = 30):
 
 @dp.message(CommandStart())
 async def handle_start(message: Message, command: CommandObject):
-    """هندلر جامع استارت برای آیفون، اندروید و دسکتاپ"""
+    """هندلر استارت سازگار با آیفون و اندروید"""
     args = command.args
 
-    # اگر کاربر از طریق لینک ویدیویی وارد شده باشد
     if args:
         short_id = args.strip()
-        file_id = video_db.get(short_id)
+        item = media_db.get(short_id)
 
-        if file_id:
+        if item:
+            # سازگاری با فرمت جدید و فرمت‌های قدیمی
+            if isinstance(item, dict):
+                file_id = item.get("file_id")
+                file_type = item.get("type", "video")
+            else:
+                file_id = item
+                file_type = "video"
+
             try:
-                sent_msg = await message.answer_video(
-                    video=file_id,
-                    caption="⚠️ این ویدیو پس از ۳۰ ثانیه به صورت خودکار حذف خواهد شد."
-                )
+                caption_text = "⚠️ این فایل پس از ۳۰ ثانیه به صورت خودکار حذف خواهد شد."
+                
+                if file_type == "photo":
+                    sent_msg = await message.answer_photo(photo=file_id, caption=caption_text)
+                else:
+                    sent_msg = await message.answer_video(video=file_id, caption=caption_text)
+
                 asyncio.create_task(delete_message_later(message.chat.id, sent_msg.message_id, delay=30))
                 return
             except Exception:
-                await message.answer("❌ متأسفانه در ارسال ویدیو خطایی رخ داد.")
+                await message.answer("❌ متأسفانه در ارسال فایل خطایی رخ داد.")
                 return
         else:
             await message.answer("❌ این لینک معتبر نیست یا منقضی شده است.")
             return
 
-    # اگر استارت معمولی و بدون لینک باشد
+    # پیام استارت عادی
     if message.from_user.id in ADMIN_IDS:
         await message.answer(
             "سلام ادمین عزیز! 👋\n\n"
-            "برای ساخت لینک کوتاه و استاندارد، ویدیو مورد نظر را برای من ارسال یا فوروارد کنید."
+            "برای ساخت لینک اختصاصی، کافیست **عکس** یا **ویدیو** مورد نظر را برای من ارسال کنید."
         )
     else:
         await message.answer(
             "سلام! 👋\n"
-            "برای دریافت ویدیوها لطفا از لینک‌های اختصاصی استفاده کنید."
+            "برای دریافت فایل‌ها لطفاً از لینک‌های اختصاصی استفاده کنید."
         )
 
-@dp.message(F.video)
-async def handle_video_upload(message: Message):
-    """دریافت ویدیو فقط از ادمین و ایجاد لینک کوتاه و ایمن"""
+@dp.message(F.video | F.photo)
+async def handle_media_upload(message: Message):
+    """دریافت ویدیو یا عکس از ادمین و ایجاد لینک اختصاصی کوتاه"""
     if message.from_user.id not in ADMIN_IDS:
-        await message.reply("⛔️ شما اجازه آپلود ویدیو و ساخت لینک را ندارید.")
+        await message.reply("⛔️ شما اجازه آپلود فایل و ساخت لینک را ندارید.")
         return
 
-    file_id = message.video.file_id
-    
-    # ساخت یک شناسه کوتاه ۸ کاراکتری برای سازگاری کامل با iOS و Android
+    # تشخیص نوع فایل و گرفتن file_id
+    if message.video:
+        file_id = message.video.file_id
+        media_type = "video"
+        type_fa = "ویدیو"
+    elif message.photo:
+        file_id = message.photo[-1].file_id  # بالاترین کیفیت عکس
+        media_type = "photo"
+        type_fa = "عکس"
+    else:
+        return
+
+    # ساخت شناسه کوتاه اختصاصی
     short_id = uuid.uuid4().hex[:8]
-    
-    # ذخیره شناسه در دیتابیس
-    video_db[short_id] = file_id
-    save_db(video_db)
+    media_db[short_id] = {
+        "file_id": file_id,
+        "type": media_type
+    }
+    save_db(media_db)
 
     bot_info = await bot.get_me()
     link = f"https://t.me/{bot_info.username}?start={short_id}"
 
     await message.reply(
-        f"✅ <b>ویدیو با موفقیت ذخیره شد!</b>\n\n"
+        f"✅ <b>{type_fa} با موفقیت ذخیره شد!</b>\n\n"
         f"🔗 <b>لینک اختصاصی (سازگار با آیفون و اندروید):</b>\n"
         f"<code>{link}</code>\n\n"
-        f"💡 روی لینک بالا بزنید یا آن را در کانال/گروه به اشتراک بگذارید."
+        f"💡 روی لینک بزنید یا آن را در کانال قرار دهید."
     )
 
-# وب‌سرور داخلی برای حفظ پایداری در رندر
+# وب‌سرور داخلی برای ماندگاری روی رندر
 async def handle_ping(request):
-    return web.Response(text="Bot is running!")
+    return web.Response(text="Bot is running smoothly!")
 
 async def start_web_server():
     app = web.Application()
